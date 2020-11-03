@@ -104,7 +104,7 @@ class MAML(tf.keras.Model):
                     tf.Variable(self.inner_update_lr, name='inner_update_lr_%s_%d' % (key, j)) for j in
                     range(num_inner_updates)]
 
-    def call(self, inp, meta_batch_size=25, num_inner_updates=1, grad_weights=(.01, 10)):
+    def call(self, inp, meta_batch_size=25, num_inner_updates=1):
         def task_inner_loop(inp, reuse=True,
                             meta_batch_size=25, num_inner_updates=1):
             """
@@ -155,15 +155,13 @@ class MAML(tf.keras.Model):
             # task_loss_tr_pre = self.loss_func(task_output_tr_pre, label_tr)
 
             for i in range(num_inner_updates):
-                with tf.GradientTape(persistent=True) as t:
+                with tf.GradientTape() as t:
                     t.watch(wl)
                     t.watch(input_tr)
                     pred_tr = self.conv_layers(input_tr, wl)
                     loss = self.loss_func(label_tr, pred_tr)
 
                 grad = t.gradient(loss, wl)
-                grad_inputs = t.gradient(pred_tr, input_tr)
-                del t
 
                 if i == 0:
                     task_output_tr_pre = pred_tr
@@ -177,9 +175,6 @@ class MAML(tf.keras.Model):
 
                 pred_ts = self.conv_layers(input_ts, wl)
                 ts_loss = self.loss_func(label_ts, pred_ts)
-                before = ts_loss
-                a, b = grad_weights
-                ts_loss -= a * tf.minimum(tf.norm(grad_inputs), b * ts_loss)
                 task_outputs_ts.append(pred_ts)
                 task_losses_ts.append(ts_loss)
 
@@ -194,7 +189,7 @@ class MAML(tf.keras.Model):
                                                    tf.argmax(input=tf.nn.softmax(task_outputs_ts[j]), axis=1)))
 
             task_output = [task_output_tr_pre, task_outputs_ts, task_loss_tr_pre, task_losses_ts, task_accuracy_tr_pre,
-                           task_accuracies_ts]
+                           task_accuracies_ts, wl]
 
             return task_output
 
@@ -206,9 +201,8 @@ class MAML(tf.keras.Model):
                                  num_inner_updates)
         out_dtype = [tf.float32, [tf.float32] * num_inner_updates, tf.float32, [tf.float32] * num_inner_updates]
         out_dtype.extend([tf.float32, [tf.float32] * num_inner_updates])
-        task_inner_loop_partial = partial(task_inner_loop, meta_batch_size=meta_batch_size,
-                                          num_inner_updates=num_inner_updates)
+        K, N = meta_batch_size, input_tr.shape[1]
+        inp = (tf.reshape(input_tr, (N * K, 784)), tf.reshape(input_ts, (N * K, 784)), tf.reshape(label_tr, (N*K, N)),tf.reshape(label_ts, (N*K, N)))
 
-        result = tf.map_fn(task_inner_loop_partial, elems=(input_tr, input_ts, label_tr, label_ts), dtype=out_dtype,
-                           parallel_iterations=meta_batch_size)
+        result = task_inner_loop(inp, meta_batch_size = meta_batch_size, num_inner_updates = num_inner_updates)
         return result
