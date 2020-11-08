@@ -104,7 +104,7 @@ class MAML(tf.keras.Model):
                     tf.Variable(self.inner_update_lr, name='inner_update_lr_%s_%d' % (key, j)) for j in
                     range(num_inner_updates)]
 
-    def call(self, inp, meta_batch_size=25, num_inner_updates=1, grad_weights=(.01, 10)):
+    def call(self, inp, meta_batch_size=25, num_inner_updates=1, g_clip=0., g_weight=0.):
         def task_inner_loop(inp, reuse=True,
                             meta_batch_size=25, num_inner_updates=1):
             """
@@ -177,9 +177,7 @@ class MAML(tf.keras.Model):
 
                 pred_ts = self.conv_layers(input_ts, wl)
                 ts_loss = self.loss_func(label_ts, pred_ts)
-                before = ts_loss
-                a, b = grad_weights
-                ts_loss -= a * tf.minimum(tf.norm(grad_inputs), b * ts_loss)
+                ts_loss -= (g_weight / (g_clip + 1e-6)) * tf.clip_by_value(tf.norm(grad_inputs), 0, g_clip)
                 task_outputs_ts.append(pred_ts)
                 task_losses_ts.append(ts_loss)
 
@@ -209,6 +207,5 @@ class MAML(tf.keras.Model):
         task_inner_loop_partial = partial(task_inner_loop, meta_batch_size=meta_batch_size,
                                           num_inner_updates=num_inner_updates)
 
-        result = tf.map_fn(task_inner_loop_partial, elems=(input_tr, input_ts, label_tr, label_ts), dtype=out_dtype,
-                           parallel_iterations=meta_batch_size)
+        result = tf.map_fn(task_inner_loop_partial, elems=(input_tr, input_ts, label_tr, label_ts), dtype=out_dtype)
         return result

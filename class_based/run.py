@@ -2,9 +2,10 @@ import numpy as np
 import random
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from class_based.dataloader import DataGenerator
+from class_based.dataloader import DataGenerator, get_datagen_as_dataset
 from class_based.maml import MAML
 import pickle
+
 
 """Model training code"""
 """
@@ -17,9 +18,10 @@ Usage Instructions:
 """
 
 
-def outer_train_step(inp, model, optim, meta_batch_size=25, num_inner_updates=1, grad_weights=(0.01, 10)):
+def outer_train_step(inp, model, optim, meta_batch_size=25, num_inner_updates=1, g_clip=0., g_weight=0.):
     with tf.GradientTape(persistent=False) as outer_tape:
-        result = model(inp, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates, grad_weights=grad_weights)
+        result = model(inp, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates, g_clip=g_clip,
+                       g_weight=g_weight)
 
         outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts = result
 
@@ -51,14 +53,16 @@ def outer_eval_step(inp, model, meta_batch_size=25, num_inner_updates=1):
 
 def meta_train_fn(model, exp_string, data_generator: DataGenerator,
                   n_way=5, meta_train_iterations=10000, meta_batch_size=25,
-                  log=True, logdir='/tmp/data', k_shot=1, num_inner_updates=1, meta_lr=0.001, grad_weights=(0.01, 10)):
+                  log=True, logdir='/tmp/data', k_shot=1, num_inner_updates=1, meta_lr=0.001, g_clip=0., g_weight=0.):
     SUMMARY_INTERVAL = 10
     SAVE_INTERVAL = 100
     PRINT_INTERVAL = 10
     TEST_PRINT_INTERVAL = PRINT_INTERVAL * 5
 
     pre_accuracies, post_accuracies = [], []
-
+    accs_itrs = []
+    pre_accs_avgs = []
+    post_accs_avgs = []
     val_accs = []
     val_itrs = []
 
@@ -66,14 +70,18 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=meta_lr)
 
-    for itr in range(meta_train_iterations):
+    dataset = get_datagen_as_dataset(data_generator, 'meta_train', meta_batch_size)
+
+    for itr, (image_batches, label_batches) in zip(range(meta_train_iterations), dataset):
         #############################
         #### YOUR CODE GOES HERE ####
 
         # sample a batch of training data and partition into
         # the support/training set (input_tr, label_tr) and the query/test set (input_ts, label_ts)
         # NOTE: The code assumes that the support and query sets have the same number of examples.
-        image_batches, label_batches = data_generator.sample_batch('meta_train', meta_batch_size)
+
+        # image_batches, label_batches = data_generator.sample_batch('meta_train', meta_batch_size)
+
         input_tr, label_tr = image_batches[:, :, :k_shot], label_batches[:, :, :k_shot]
         input_ts, label_ts = image_batches[:, :, k_shot:], label_batches[:, :, k_shot:]
 
@@ -87,15 +95,19 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
         inp = (input_tr, input_ts, label_tr, label_ts)
 
         result = outer_train_step(inp, model, optimizer, meta_batch_size=meta_batch_size,
-                                  num_inner_updates=num_inner_updates, grad_weights=grad_weights)
+                                  num_inner_updates=num_inner_updates, g_clip=g_clip, g_weight=g_weight)
 
         if itr % SUMMARY_INTERVAL == 0:
             pre_accuracies.append(result[-2])
             post_accuracies.append(result[-1][-1])
 
         if (itr != 0) and itr % PRINT_INTERVAL == 0:
+            pre_accs_avgs.append(np.mean(pre_accuracies))
+            post_accs_avgs.append(np.mean(post_accuracies))
+            accs_itrs.append(itr)
             print_str = 'Iteration %d: pre-inner-loop train accuracy: %.5f, post-inner-loop test accuracy: %.5f' % (
-                itr, np.mean(pre_accuracies), np.mean(post_accuracies))
+                itr, pre_accs_avgs[-1], post_accs_avgs[-1])
+
             print(print_str)
             pre_accuracies, post_accuracies = [], []
 
@@ -130,7 +142,9 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
     model_file = logdir + '/' + exp_string + '/model' + str(itr)
     print("Saving to ", model_file)
     model.save_weights(model_file)
-    plt.plot(val_itrs, val_accs, label='maml_val, lr=%.5f' % model.inner_update_lr)
+    plt.plot(val_itrs, val_accs, label='maml_val')
+    plt.plot(accs_itrs, pre_accs_avgs, label='pre_acc')
+    plt.plot(accs_itrs, post_accs_avgs, label='post_acc')
 
 
 # calculated for omniglot
@@ -184,9 +198,10 @@ def run_maml(n_way=5, k_shot=1, meta_batch_size=25, meta_lr=0.001,
              learn_inner_update_lr=True, resume=False, resume_itr=0, log=True, logdir='/tmp/data',
              data_path='./omniglot_resized', meta_train=True,
              num_train_chars=1100, num_val_chars=100,
-             meta_train_iterations=10000, meta_train_k_shot=-1, meta_train_inner_update_lr=-1, grad_weights=(0.01, 10)):
+             meta_train_iterations=20000, meta_train_k_shot=-1, meta_train_inner_update_lr=-1, g_clip=0., g_weight=0.):
     # call data_generator and get data with k_shot*2 samples per class
-    data_generator = DataGenerator(n_way, k_shot * 2, n_way, k_shot * 2, config={'data_folder': data_path}, num_train_chars=num_train_chars, num_val_chars=num_val_chars)
+    data_generator = DataGenerator(n_way, k_shot * 2, n_way, k_shot * 2, config={'data_folder': data_path},
+                                   num_train_chars=num_train_chars, num_val_chars=num_val_chars)
 
     # set up MAML model
     dim_output = data_generator.dim_output
@@ -211,7 +226,7 @@ def run_maml(n_way=5, k_shot=1, meta_batch_size=25, meta_lr=0.001,
     if meta_train:
         return meta_train_fn(model, exp_string, data_generator,
                              n_way, meta_train_iterations, meta_batch_size, log, logdir,
-                             k_shot, num_inner_updates, meta_lr, grad_weights=grad_weights)
+                             k_shot, num_inner_updates, meta_lr, g_clip=g_clip, g_weight=g_weight)
     else:
         meta_batch_size = 1
 
@@ -227,12 +242,24 @@ if __name__ == '__main__':
     if len(gpus) > 0:
         tf.config.experimental.set_memory_growth(gpus[0], True)
 
-    # (0, 0), (0.001, 100)
-    grad_weight_options = [(0.005, 10), (.0005, 100)]
-    for grad_weights in grad_weight_options:
-        plt.clf()
-        num_train_chars = 128
-        num_filters = 32
-        run_maml(n_way=10, k_shot=1, num_inner_updates=1, num_filters=num_filters, num_train_chars=num_train_chars, grad_weights=grad_weights)
-        plt.savefig('maml-nf=%d,nt=%d,gw=(%3f,%3f).svg' % (num_filters, num_train_chars,grad_weights[0], grad_weights[1]), format='svg')
+    #
 
+    # run currrrently doinng (.01, 1), (.1, 1), (1, 1), (10, 1), (100, 1)
+    # other run (0, 0), (1, .01),  (1, .1) (1, 10), (1, 100)
+
+    for g_clip, g_weight in [(50, 1)]:
+        plt.clf()
+        num_train_chars = 256
+        num_filters = 64
+        run_maml(n_way=20,
+                 k_shot=1,
+                 num_inner_updates=1,
+                 num_filters=num_filters,
+                 num_train_chars=num_train_chars,
+                 meta_batch_size=10,
+                 g_clip=g_clip,
+                 g_weight=g_weight
+                 )
+        plt.legend()
+        plt.savefig('maml-nf=%d,nt=%d, gc=%.2f, gw=%.2f, custom.png' %
+                    (num_filters, num_train_chars, g_clip, g_weight), format='png', dpi=600)
