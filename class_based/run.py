@@ -29,13 +29,18 @@ def outer_train_step(inp1, inp2, model, optim, meta_batch_size=20, num_inner_upd
         total_losses_ts = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts]
         total_losses_ts2 = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts2]
         pre_final_loss = total_losses_ts[-1] + total_losses_ts2[-1]
-        diversity_loss = lam * tf.reduce_sum([tf.reduce_mean(tf.abs(wl[key] - wl2[key]) / tf.reduce_mean(tf.abs(wl[key]))) for key in wl.keys()])
+        diversity_loss = tf.reduce_mean([tf.reduce_mean(tf.abs(wl[key] - wl2[key]) / tf.reduce_mean(tf.abs(wl[key]))) for key in wl.keys()])
+        # print('div_loss: ', diversity_loss)
 
     gradients = outer_tape.gradient(pre_final_loss, model.trainable_variables)
     gradients2 = outer_tape.gradient(diversity_loss, model.trainable_variables)
+    # print('grad: ', np.mean([tf.norm(g) for g in gradients]))
+    # print('grad2: ', np.mean([tf.norm(g) for g in gradients2]))
     del outer_tape
-    gradients2 = [tf.clip_by_norm(g2, tf.norm(g1) * 2) for g1, g2 in zip(gradients, gradients2)]
+    gradients2 = [lam * tf.clip_by_norm(g2, tf.norm(g1)) for g1, g2 in zip(gradients, gradients2)]
+    # print('grad2 clip: ', np.mean([tf.norm(g) for g in gradients2]))
     gradients = [tf.subtract(g1, g2) for g1, g2 in zip(gradients, gradients2)]
+    # print('final grads: ', np.mean([tf.norm(g) for g in gradients]))
     optim.apply_gradients(zip(gradients, model.trainable_variables))
 
     total_loss_tr_pre = tf.reduce_mean(losses_tr_pre)
@@ -249,9 +254,10 @@ if __name__ == '__main__':
     plt.clf()
     num_train_chars = 128
     num_filters = 32
-    lam = 500
-    run_maml(n_way=20, k_shot=1, num_inner_updates=1, meta_batch_size=10, num_filters=num_filters,
-             num_train_chars=num_train_chars, lam=lam)
-    plt.savefig(
-        'maml-nf=%d,nt=%d,lam=(%3f).svg' % (num_filters, num_train_chars, lam),
-        format='svg')
+
+    for lam in [0, .01, .1, .5, .9, 1, 2]:
+        run_maml(n_way=20, k_shot=1, num_inner_updates=1, meta_batch_size=10, num_filters=num_filters,
+                 num_train_chars=num_train_chars, lam=lam)
+        plt.savefig(
+            'maml-nf=%d,nt=%d,lam=%3f.png' % (num_filters, num_train_chars, lam),
+            format='png', dpi=600)
