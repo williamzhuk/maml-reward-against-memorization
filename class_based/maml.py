@@ -122,7 +122,7 @@ class MAML(tf.keras.Model):
                 task_output: a list of outputs, losses and accuracies at each inner update
             """
             # the inner and outer loop data
-            input_tr, input_ts, label_tr, label_ts = inp
+            input_tr, input_ts, label_tr, label_ts, noise = inp
 
             # weights corresponds to the initial weights in MAML (i.e. the meta-parameters)
             weights = self.conv_layers.conv_weights

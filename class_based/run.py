@@ -2,7 +2,7 @@ import numpy as np
 import random
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from class_based.dataloader import DataGenerator
+from class_based.dataloader import DataGenerator, get_datagen_as_dataset
 from class_based.maml import MAML
 import pickle
 
@@ -18,8 +18,14 @@ Usage Instructions:
 """
 
 
-def outer_train_step(inp1, inp2, model, optim, meta_batch_size=20, num_inner_updates=1, lam=1):
-    with tf.GradientTape(persistent=True) as outer_tape:
+def outer_train_step(inp, model, optim, meta_batch_size=20, num_inner_updates=1, noise_dev=0, noise_weight=0):
+    with tf.GradientTape() as outer_tape:
+        noise1 = tf.random.normal(inp[0].shape, stddev=noise_dev)
+        noise2 = tf.random.normal(inp[0].shape, stddev=noise_dev)
+
+        inp1 = (*inp, noise1)
+        inp2 = (*inp, noise2)
+
         result1 = model(inp1, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
         outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts, wl = result1
 
@@ -29,18 +35,14 @@ def outer_train_step(inp1, inp2, model, optim, meta_batch_size=20, num_inner_upd
         total_losses_ts = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts]
         total_losses_ts2 = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts2]
         pre_final_loss = total_losses_ts[-1] + total_losses_ts2[-1]
-        diversity_loss = tf.reduce_mean([tf.reduce_mean(tf.abs(wl[key] - wl2[key]) / tf.reduce_mean(tf.abs(wl[key]))) for key in wl.keys()])
-        # print('div_loss: ', diversity_loss)
+        diversity_loss = tf.reduce_mean(
+            [tf.reduce_mean(tf.abs(wl[key] - wl2[key]) / tf.reduce_mean(tf.abs(wl[key]))) for key in wl.keys()])
+        if np.random.random() < .02:
+            print('div_loss: ', diversity_loss)
+            print('pre_final_loss', pre_final_loss)
+        final_loss = pre_final_loss - noise_weight * (diversity_loss / (noise_dev + 1e-6))
 
-    gradients = outer_tape.gradient(pre_final_loss, model.trainable_variables)
-    gradients2 = outer_tape.gradient(diversity_loss, model.trainable_variables)
-    # print('grad: ', np.mean([tf.norm(g) for g in gradients]))
-    # print('grad2: ', np.mean([tf.norm(g) for g in gradients2]))
-    del outer_tape
-    gradients2 = [lam * tf.clip_by_norm(g2, tf.norm(g1)) for g1, g2 in zip(gradients, gradients2)]
-    # print('grad2 clip: ', np.mean([tf.norm(g) for g in gradients2]))
-    gradients = [tf.subtract(g1, g2) for g1, g2 in zip(gradients, gradients2)]
-    # print('final grads: ', np.mean([tf.norm(g) for g in gradients]))
+    gradients = outer_tape.gradient(final_loss, model.trainable_variables)
     optim.apply_gradients(zip(gradients, model.trainable_variables))
 
     total_loss_tr_pre = tf.reduce_mean(losses_tr_pre)
@@ -66,14 +68,16 @@ def outer_eval_step(inp, model, meta_batch_size=25, num_inner_updates=1):
 
 def meta_train_fn(model, exp_string, data_generator: DataGenerator,
                   n_way=5, meta_train_iterations=10000, meta_batch_size=25,
-                  log=True, logdir='/tmp/data', k_shot=1, num_inner_updates=1, meta_lr=0.001, lam=1):
+                  log=True, logdir='/tmp/data', k_shot=1, num_inner_updates=1, meta_lr=0.001, noise_dev=0, noise_weight=0):
     SUMMARY_INTERVAL = 10
     SAVE_INTERVAL = 100
     PRINT_INTERVAL = 10
     TEST_PRINT_INTERVAL = PRINT_INTERVAL * 5
 
     pre_accuracies, post_accuracies = [], []
-
+    accs_itrs = []
+    pre_accs_avgs = []
+    post_accs_avgs = []
     val_accs = []
     val_itrs = []
 
@@ -81,8 +85,8 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=meta_lr)
 
+    dataset_iter = iter(get_datagen_as_dataset(data_generator, 'meta_train', meta_batch_size))
     for itr in range(meta_train_iterations):
-
         #############################
         #### YOUR CODE GOES HERE ####
 
@@ -91,7 +95,7 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
         # NOTE: The code assumes that the support and query sets have the same number of examples.
 
         def sample_and_reshape():
-            image_batches, label_batches = data_generator.sample_batch('meta_train', meta_batch_size)
+            image_batches, label_batches = dataset_iter.get_next()
             input_tr, label_tr = image_batches[:, :, :k_shot], label_batches[:, :, :k_shot]
             input_ts, label_ts = image_batches[:, :, k_shot:], label_batches[:, :, k_shot:]
 
@@ -104,19 +108,22 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
 
         #############################
 
-        inp1 = sample_and_reshape()
-        inp2 = sample_and_reshape()
+        inp = sample_and_reshape()
 
-        result = outer_train_step(inp1, inp2, model, optimizer, meta_batch_size=meta_batch_size,
-                                  num_inner_updates=num_inner_updates, lam=lam)
+        result = outer_train_step(inp, model, optimizer, meta_batch_size=meta_batch_size,
+                                  num_inner_updates=num_inner_updates, noise_dev=noise_dev, noise_weight=noise_weight)
 
         if itr % SUMMARY_INTERVAL == 0:
             pre_accuracies.append(result[-2])
             post_accuracies.append(result[-1][-1])
 
         if (itr != 0) and itr % PRINT_INTERVAL == 0:
+            pre_accs_avgs.append(np.mean(pre_accuracies))
+            post_accs_avgs.append(np.mean(post_accuracies))
+            accs_itrs.append(itr)
             print_str = 'Iteration %d: pre-inner-loop train accuracy: %.5f, post-inner-loop test accuracy: %.5f' % (
-                itr, np.mean(pre_accuracies), np.mean(post_accuracies))
+                itr, pre_accs_avgs[-1], post_accs_avgs[-1])
+
             print(print_str)
             pre_accuracies, post_accuracies = [], []
 
@@ -151,7 +158,9 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
     model_file = logdir + '/' + exp_string + '/model' + str(itr)
     print("Saving to ", model_file)
     model.save_weights(model_file)
-    plt.plot(val_itrs, val_accs, label='maml_val, lr=%.5f' % model.inner_update_lr)
+    plt.plot(val_itrs, val_accs, label='maml_val')
+    plt.plot(accs_itrs, pre_accs_avgs, label='pre_acc')
+    plt.plot(accs_itrs, post_accs_avgs, label='post_acc')
 
 
 # calculated for omniglot
@@ -205,7 +214,7 @@ def run_maml(n_way=5, k_shot=1, meta_batch_size=25, meta_lr=0.001,
              learn_inner_update_lr=True, resume=False, resume_itr=0, log=True, logdir='/tmp/data',
              data_path='./omniglot_resized', meta_train=True,
              num_train_chars=1100, num_val_chars=100,
-             meta_train_iterations=10000, meta_train_k_shot=-1, meta_train_inner_update_lr=-1, lam=1):
+             meta_train_iterations=10000, meta_train_k_shot=-1, meta_train_inner_update_lr=-1, noise_dev=0, noise_weight=0):
     # call data_generator and get data with k_shot*2 samples per class
     data_generator = DataGenerator(n_way, k_shot * 2, n_way, k_shot * 2, config={'data_folder': data_path},
                                    num_train_chars=num_train_chars, num_val_chars=num_val_chars)
@@ -233,7 +242,7 @@ def run_maml(n_way=5, k_shot=1, meta_batch_size=25, meta_lr=0.001,
     if meta_train:
         return meta_train_fn(model, exp_string, data_generator,
                              n_way, meta_train_iterations, meta_batch_size, log, logdir,
-                             k_shot, num_inner_updates, meta_lr, lam=lam)
+                             k_shot, num_inner_updates, meta_lr, noise_dev=noise_dev, noise_weight=noise_weight)
     else:
         meta_batch_size = 1
 
@@ -253,11 +262,13 @@ if __name__ == '__main__':
 
     plt.clf()
     num_train_chars = 128
-    num_filters = 32
+    num_filters = 64
 
-    for lam in [0, .01, .1, .5, .9, 1, 2]:
+    for nd, nw in [(.1, 1), (.01, 10)]:
+        plt.clf()
         run_maml(n_way=20, k_shot=1, num_inner_updates=1, meta_batch_size=10, num_filters=num_filters,
-                 num_train_chars=num_train_chars, lam=lam)
+                 num_train_chars=num_train_chars, noise_dev=nd, noise_weight=nw)
+        plt.legend()
         plt.savefig(
-            'maml-nf=%d,nt=%d,lam=%3f.png' % (num_filters, num_train_chars, lam),
+            'maml-nf=%d,nt=%d,dev=%3f,w=%3f.png' % (num_filters, num_train_chars, nd, nw),
             format='png', dpi=600)

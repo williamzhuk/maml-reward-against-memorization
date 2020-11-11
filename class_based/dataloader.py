@@ -152,3 +152,19 @@ class DataGenerator(object):
         all_image_batches = np.stack(all_image_batches)
         all_label_batches = np.stack(all_label_batches)
         return all_image_batches, all_label_batches
+
+
+def get_datagen_as_dataset(data_generator: DataGenerator, batch_type, batch_size):
+    def gen_fn():
+        while True:
+            yield data_generator.sample_batch(batch_type, batch_size)
+
+    B = batch_size
+    N = data_generator.num_classes
+    K = data_generator.num_samples_per_class
+    generator_types = (tf.float32, tf.int8)
+    generator_shapes = tf.TensorShape([B, N, K, data_generator.dim_input]), tf.TensorShape([B, N, K, N])
+
+    dataset = tf.data.Dataset.from_generator(gen_fn, generator_types)
+    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    return dataset
