@@ -198,7 +198,7 @@ def run_maml(n_way=5, k_shot=1, meta_batch_size=25, meta_lr=0.001,
              learn_inner_update_lr=True, resume=False, resume_itr=0, log=True, logdir='/tmp/data',
              data_path='./omniglot_resized', meta_train=True,
              num_train_chars=1100, num_val_chars=100,
-             meta_train_iterations=20000, meta_train_k_shot=-1, meta_train_inner_update_lr=-1, g_clip=0., g_weight=0.):
+             meta_train_iterations=10000, meta_train_k_shot=-1, meta_train_inner_update_lr=-1, g_clip=0., g_weight=0.):
     # call data_generator and get data with k_shot*2 samples per class
     data_generator = DataGenerator(n_way, k_shot * 2, n_way, k_shot * 2, config={'data_folder': data_path},
                                    num_train_chars=num_train_chars, num_val_chars=num_val_chars)
@@ -247,16 +247,16 @@ if __name__ == '__main__':
     # run currrrently doinng (.01, 1), (.1, 1), (1, 1), (10, 1), (100, 1)
     # other run (0, 0), (1, .01),  (1, .1) (1, 10), (1, 100)
 
-    for g_clip, g_weight in [(50, 1)]:
+    for g_clip, g_weight in [(-1, 50)]:
         plt.clf()
-        num_train_chars = 256
+        num_train_chars = 128
         num_filters = 64
         run_maml(n_way=20,
                  k_shot=1,
                  num_inner_updates=1,
                  num_filters=num_filters,
                  num_train_chars=num_train_chars,
-                 meta_batch_size=10,
+                 meta_batch_size=20,
                  g_clip=g_clip,
                  g_weight=g_weight
                  )

@@ -177,7 +177,7 @@ class MAML(tf.keras.Model):
 
                 pred_ts = self.conv_layers(input_ts, wl)
                 ts_loss = self.loss_func(label_ts, pred_ts)
-                ts_loss -= (g_weight / (g_clip + 1e-6)) * tf.clip_by_value(tf.norm(grad_inputs), 0, g_clip)
+                ts_loss -= (g_weight * ts_loss) * tf.clip_by_value(tf.norm(grad_inputs), 0, 1/ts_loss)
                 task_outputs_ts.append(pred_ts)
                 task_losses_ts.append(ts_loss)
 
