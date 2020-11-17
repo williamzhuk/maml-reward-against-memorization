@@ -20,11 +20,11 @@ Usage Instructions:
 
 def outer_train_step(inp1, inp2, model, optim, meta_batch_size=20, num_inner_updates=1, lam=0.):
     with tf.GradientTape(persistent=True) as outer_tape:
-        result1 = model(inp1, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
-        outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts, wl = result1
+        result1, wl = model(inp1, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
+        outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts = result1
 
-        result2 = model(inp2, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
-        _, _, _, losses_ts2, _, _, wl2 = result2
+        result2, wl2 = model(inp2, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
+        _, _, _, losses_ts2, _, _ = result2
 
         total_losses_ts = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts]
         total_losses_ts2 = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts2]
@@ -51,9 +51,9 @@ def outer_train_step(inp1, inp2, model, optim, meta_batch_size=20, num_inner_upd
 
 
 def outer_eval_step(inp, model, meta_batch_size=25, num_inner_updates=1):
-    result = model(inp, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
+    result, _ = model(inp, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
 
-    outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts, _ = result
+    outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts = result
 
     total_loss_tr_pre = tf.reduce_mean(losses_tr_pre)
     total_losses_ts = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts]
@@ -261,7 +261,7 @@ if __name__ == '__main__':
 
     plt.clf()
     num_train_chars = 128
-    num_filters = 64
+    num_filters = 32
 
     for lam in [.1, .5, 1]:
         plt.clf()

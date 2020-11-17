@@ -202,7 +202,12 @@ class MAML(tf.keras.Model):
         out_dtype = [tf.float32, [tf.float32] * num_inner_updates, tf.float32, [tf.float32] * num_inner_updates]
         out_dtype.extend([tf.float32, [tf.float32] * num_inner_updates])
         K, N = meta_batch_size, input_tr.shape[1]
-        inp = (tf.reshape(input_tr, (N * K, 784)), tf.reshape(input_ts, (N * K, 784)), tf.reshape(label_tr, (N*K, N)),tf.reshape(label_ts, (N*K, N)))
+        # inp = (tf.reshape(input_tr, (N * K, 784)), tf.reshape(input_ts, (N * K, 784)), tf.reshape(label_tr, (N*K, N)),tf.reshape(label_ts, (N*K, N)))
+        results = []
+        for itr, its, ltr, lts in zip(input_tr, input_ts, label_tr, label_ts):
+            result = task_inner_loop((itr, its, ltr, lts), meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
+            results.append(result)
 
-        result = task_inner_loop(inp, meta_batch_size = meta_batch_size, num_inner_updates = num_inner_updates)
-        return result
+        wls = [result[-1] for result in results]
+        concat_wls = {key: tf.reduce_mean([wl[key] for wl in wls]) for key in wls[0].keys()}
+        return (tf.concat([result[i] for result in results], axis=0) for i in range(len(results[0])-1)), concat_wls
