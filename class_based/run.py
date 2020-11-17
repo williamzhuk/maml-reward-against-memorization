@@ -23,7 +23,7 @@ def outer_train_step(inp, model, optim, meta_batch_size=25, num_inner_updates=1,
         result = model(inp, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates, g_clip=g_clip,
                        g_weight=g_weight)
 
-        outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts = result
+        outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts, is_clipped = result
 
         total_losses_ts = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts]
 
@@ -34,13 +34,13 @@ def outer_train_step(inp, model, optim, meta_batch_size=25, num_inner_updates=1,
     total_accuracy_tr_pre = tf.reduce_mean(accuracies_tr_pre)
     total_accuracies_ts = [tf.reduce_mean(accuracy_ts) for accuracy_ts in accuracies_ts]
 
-    return outputs_tr, outputs_ts, total_loss_tr_pre, total_losses_ts, total_accuracy_tr_pre, total_accuracies_ts
+    return outputs_tr, outputs_ts, total_loss_tr_pre, total_losses_ts, total_accuracy_tr_pre, total_accuracies_ts, is_clipped
 
 
 def outer_eval_step(inp, model, meta_batch_size=25, num_inner_updates=1):
     result = model(inp, meta_batch_size=meta_batch_size, num_inner_updates=num_inner_updates)
 
-    outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts = result
+    outputs_tr, outputs_ts, losses_tr_pre, losses_ts, accuracies_tr_pre, accuracies_ts, _ = result
 
     total_loss_tr_pre = tf.reduce_mean(losses_tr_pre)
     total_losses_ts = [tf.reduce_mean(loss_ts) for loss_ts in losses_ts]
@@ -65,6 +65,7 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
     post_accs_avgs = []
     val_accs = []
     val_itrs = []
+    clip_vals = []
 
     num_classes = data_generator.num_classes
 
@@ -96,6 +97,10 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
 
         result = outer_train_step(inp, model, optimizer, meta_batch_size=meta_batch_size,
                                   num_inner_updates=num_inner_updates, g_clip=g_clip, g_weight=g_weight)
+
+        is_clipped = result[-1]
+        clip_vals.append(is_clipped)
+        result = result[:-1]
 
         if itr % SUMMARY_INTERVAL == 0:
             pre_accuracies.append(result[-2])
@@ -145,6 +150,7 @@ def meta_train_fn(model, exp_string, data_generator: DataGenerator,
     plt.plot(val_itrs, val_accs, label='maml_val')
     plt.plot(accs_itrs, pre_accs_avgs, label='pre_acc')
     plt.plot(accs_itrs, post_accs_avgs, label='post_acc')
+    return clip_vals
 
 
 # calculated for omniglot
@@ -247,11 +253,11 @@ if __name__ == '__main__':
     # run currrrently doinng (.01, 1), (.1, 1), (1, 1), (10, 1), (100, 1)
     # other run (0, 0), (1, .01),  (1, .1) (1, 10), (1, 100)
 
-    for g_clip, g_weight in [(-1, 50)]:
+    for g_clip, g_weight in [(-1, 0)]:
         plt.clf()
         num_train_chars = 128
         num_filters = 64
-        run_maml(n_way=20,
+        clip_vals = run_maml(n_way=20,
                  k_shot=1,
                  num_inner_updates=1,
                  num_filters=num_filters,
@@ -263,3 +269,8 @@ if __name__ == '__main__':
         plt.legend()
         plt.savefig('maml-nf=%d,nt=%d, gc=%.2f, gw=%.2f, custom.png' %
                     (num_filters, num_train_chars, g_clip, g_weight), format='png', dpi=600)
+
+        plt.clf()
+        plt.plot(list(range(10000)), 1 - np.array(clip_vals).astype(np.int8))
+        plt.title('Loss function included unclipped gradients')
+        plt.savefig('clips')

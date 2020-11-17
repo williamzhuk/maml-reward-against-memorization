@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+import datetime
 from class_based.util import cross_entropy_loss, accuracy
 
 
@@ -154,6 +154,8 @@ class MAML(tf.keras.Model):
             # task_output_tr_pre = self.conv_layers(input_tr, wl[0])
             # task_loss_tr_pre = self.loss_func(task_output_tr_pre, label_tr)
 
+            is_clipped = False
+
             for i in range(num_inner_updates):
                 with tf.GradientTape(persistent=True) as t:
                     t.watch(wl)
@@ -177,7 +179,12 @@ class MAML(tf.keras.Model):
 
                 pred_ts = self.conv_layers(input_ts, wl)
                 ts_loss = self.loss_func(label_ts, pred_ts)
-                ts_loss -= (g_weight * ts_loss) * tf.clip_by_value(tf.norm(grad_inputs), 0, 1/ts_loss)
+
+                if np.random.random() < .01:
+                    print('ts_loss is %f' % ts_loss)
+                    print('grad_input_norm is %f' % tf.norm(grad_inputs))
+                ts_loss += g_weight / tf.norm(grad_inputs)
+
                 task_outputs_ts.append(pred_ts)
                 task_losses_ts.append(ts_loss)
 
@@ -192,18 +199,19 @@ class MAML(tf.keras.Model):
                                                    tf.argmax(input=tf.nn.softmax(task_outputs_ts[j]), axis=1)))
 
             task_output = [task_output_tr_pre, task_outputs_ts, task_loss_tr_pre, task_losses_ts, task_accuracy_tr_pre,
-                           task_accuracies_ts]
+                           task_accuracies_ts, is_clipped]
 
             return task_output
 
         input_tr, input_ts, label_tr, label_ts = inp
         # to initialize the batch norm vars, might want to combine this, and not run idx 0 twice.
+
         unused = task_inner_loop((input_tr[0], input_ts[0], label_tr[0], label_ts[0]),
                                  False,
                                  meta_batch_size,
                                  num_inner_updates)
         out_dtype = [tf.float32, [tf.float32] * num_inner_updates, tf.float32, [tf.float32] * num_inner_updates]
-        out_dtype.extend([tf.float32, [tf.float32] * num_inner_updates])
+        out_dtype.extend([tf.float32, [tf.float32] * num_inner_updates, bool])
         task_inner_loop_partial = partial(task_inner_loop, meta_batch_size=meta_batch_size,
                                           num_inner_updates=num_inner_updates)
 
