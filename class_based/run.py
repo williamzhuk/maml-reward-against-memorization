@@ -263,7 +263,7 @@ if __name__ == '__main__':
     num_train_chars = 128
     num_filters = 32
 
-    for lam in [.1, .5, 1]:
+    for lam in [0, 1]:
         plt.clf()
         run_maml(n_way=20, k_shot=1, num_inner_updates=1, meta_batch_size=10, num_filters=num_filters,
                  num_train_chars=num_train_chars, lam=lam)
